@@ -1,0 +1,8 @@
+package latency
+
+const (
+	ASSIGNED  = "ASSIGNED"
+	PICKED    = "PICKED"
+	VENDOR_AT = "VENDOR_AT"
+	DELIVERED = "DELIVERED"
+)
