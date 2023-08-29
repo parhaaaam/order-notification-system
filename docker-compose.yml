@@ -38,7 +38,7 @@ services:
 
 
   order-delay:
-#    image: ghcr.io/pa
+    image: ghcr.io/parhaaaam/order-notification-system:main
     build:
       context: .
 
