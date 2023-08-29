@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"order_notification_system/internal/storage/entities"
 )
@@ -30,6 +32,8 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	}
 
 	var shouldAddToQueue bool
+	var delayReportID int32
+
 	logrus.Print("this is method", r.Method)
 	idAsString := r.FormValue("id")
 	userDescription := r.FormValue("description")
@@ -40,14 +44,16 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(500)
 		return
 	}
-	status, err := s.latencyQuerier.GetTripStatusByOrderId(ctx, tx, int32(id))
-	logrus.Print("this is status: ", status)
+	res, err := s.latencyQuerier.GetTripStatusAndOrderTimeDeliveryByOrderId(ctx, tx, int32(id))
 	if err != nil {
-		fmt.Println("Error:", err)
-		w.WriteHeader(500)
+		shouldAddToQueue = true
+	}
+	if res.TimeDelivery.Time.After(time.Now()) {
+		w.WriteHeader(400)
 		return
 	}
-	switch status {
+
+	switch res.Status {
 	case VENDOR_AT, PICKED, ASSIGNED:
 		remainingTime, err := calculateRemainingTime()
 		if err != nil {
@@ -67,12 +73,37 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	case DELIVERED:
 		shouldAddToQueue = true
 	}
+	isReportValid, err := s.latencyQuerier.CheckDelayReportOrderIDIsClosed(ctx, tx, pgtype.Int4{Int32: int32(id)})
 
+	if isReportValid {
+		delayReportID, err = s.addDelayReports(ctx, tx, id, userDescription)
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		err = tx.Commit(ctx)
+		if err != nil {
+			w.WriteHeader(500)
+			fmt.Println("Error:", err)
+			return
+		}
+
+		if shouldAddToQueue {
+			err = s.addToDelayQueue(ctx, delayReportID)
+			if err != nil {
+				w.WriteHeader(500)
+				return
+			}
+		}
+	}
+}
+
+func (s *servicer) addDelayReports(ctx context.Context, tx pgx.Tx, id int,
+	userDescription string) (int32, error) {
 	description := pgtype.Text{
 		String: userDescription,
 		Valid:  true,
 	}
-
 	orderID := pgtype.Int4{
 		Int32: int32(id),
 		Valid: true,
@@ -84,36 +115,31 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	})
 	fmt.Println("Report data", description, orderID, delayReportID)
 	if err != nil {
-		w.WriteHeader(500)
-		fmt.Println("Error:", err)
-		return
+		return 0, err
 	}
 
-	err = tx.Commit(ctx)
+	return delayReportID, nil
+}
+
+func (s *servicer) addToDelayQueue(ctx context.Context, delayReportID int32) error {
+	body, err := json.Marshal(delayReportID)
 	if err != nil {
-		w.WriteHeader(500)
-		fmt.Println("Error:", err)
-		return
+		return err
 	}
 
-	if shouldAddToQueue {
-		body, err := json.Marshal(delayReportID)
-		if err != nil {
-			w.WriteHeader(500)
-			return
-		}
-		s.amqpChannel.PublishWithContext(
-			ctx,
-			"",
-			"delayed_orders",
-			false,
-			false,
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        body,
-			},
-		)
-	}
+	s.amqpChannel.PublishWithContext(
+		ctx,
+		"",
+		"delayed_orders",
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "text/plain",
+			Body:        body,
+		},
+	)
+
+	return nil
 }
 
 func calculateRemainingTime() (int, error) {

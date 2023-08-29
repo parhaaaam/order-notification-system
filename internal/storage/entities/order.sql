@@ -7,8 +7,8 @@ where o.created_at < now() - interval '1 week'
 group by v.slug
 order by 2 desc;
 
--- name: GetTripStatusByOrderId :one
-select t.status
+-- name: GetTripStatusAndOrderTimeDeliveryByOrderId :one
+select t.status, o.time_delivery
 from "order" o
          join "trip" t on o.id = t.order_id
 where o.id = $1;
@@ -22,3 +22,8 @@ returning id;
 update delay_report
 set agent_id = $1
 where id = $2;
+
+-- name: CheckDelayReportOrderIDIsClosed :one
+select case when count(*) = 0 then true else false end as all_closed
+from delay_report
+where order_id = $1 and status != 'CLOSED';

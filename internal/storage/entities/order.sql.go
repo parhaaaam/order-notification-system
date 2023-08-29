@@ -45,6 +45,19 @@ func (q *Queries) AssignOrderToAgent(ctx context.Context, db DBTX, arg AssignOrd
 	return err
 }
 
+const checkDelayReportOrderIDIsClosed = `-- name: CheckDelayReportOrderIDIsClosed :one
+select case when count(*) = 0 then true else false end as all_closed
+from delay_report
+where order_id = $1 and status != 'CLOSED'
+`
+
+func (q *Queries) CheckDelayReportOrderIDIsClosed(ctx context.Context, db DBTX, orderID pgtype.Int4) (bool, error) {
+	row := db.QueryRow(ctx, checkDelayReportOrderIDIsClosed, orderID)
+	var all_closed bool
+	err := row.Scan(&all_closed)
+	return all_closed, err
+}
+
 const getAllDelaysInLastWeek = `-- name: GetAllDelaysInLastWeek :many
 select v.slug, sum(extract(epoch from o.delivered_at - o.time_delivery)) as delay_amount
 from vendor v
@@ -80,16 +93,21 @@ func (q *Queries) GetAllDelaysInLastWeek(ctx context.Context, db DBTX) ([]GetAll
 	return items, nil
 }
 
-const getTripStatusByOrderId = `-- name: GetTripStatusByOrderId :one
-select t.status
+const getTripStatusAndOrderTimeDeliveryByOrderId = `-- name: GetTripStatusAndOrderTimeDeliveryByOrderId :one
+select t.status, o.time_delivery
 from "order" o
          join "trip" t on o.id = t.order_id
 where o.id = $1
 `
 
-func (q *Queries) GetTripStatusByOrderId(ctx context.Context, db DBTX, id int32) (string, error) {
-	row := db.QueryRow(ctx, getTripStatusByOrderId, id)
-	var status string
-	err := row.Scan(&status)
-	return status, err
+type GetTripStatusAndOrderTimeDeliveryByOrderIdRow struct {
+	Status       string           `db:"status" json:"status"`
+	TimeDelivery pgtype.Timestamp `db:"time_delivery" json:"time_delivery"`
+}
+
+func (q *Queries) GetTripStatusAndOrderTimeDeliveryByOrderId(ctx context.Context, db DBTX, id int32) (GetTripStatusAndOrderTimeDeliveryByOrderIdRow, error) {
+	row := db.QueryRow(ctx, getTripStatusAndOrderTimeDeliveryByOrderId, id)
+	var i GetTripStatusAndOrderTimeDeliveryByOrderIdRow
+	err := row.Scan(&i.Status, &i.TimeDelivery)
+	return i, err
 }

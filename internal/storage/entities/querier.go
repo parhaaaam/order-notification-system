@@ -6,13 +6,16 @@ package entities
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
 	AddDelayReports(ctx context.Context, db DBTX, arg AddDelayReportsParams) (int32, error)
 	AssignOrderToAgent(ctx context.Context, db DBTX, arg AssignOrderToAgentParams) error
+	CheckDelayReportOrderIDIsClosed(ctx context.Context, db DBTX, orderID pgtype.Int4) (bool, error)
 	GetAllDelaysInLastWeek(ctx context.Context, db DBTX) ([]GetAllDelaysInLastWeekRow, error)
-	GetTripStatusByOrderId(ctx context.Context, db DBTX, id int32) (string, error)
+	GetTripStatusAndOrderTimeDeliveryByOrderId(ctx context.Context, db DBTX, id int32) (GetTripStatusAndOrderTimeDeliveryByOrderIdRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

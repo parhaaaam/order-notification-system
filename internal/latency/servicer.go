@@ -15,7 +15,8 @@ type servicer struct {
 	delayedOrderQueue *consumer
 }
 
-func NewServicer(pool *pgxpool.Pool, latencyQuerier Storage.Querier, amqpChannel *amqp091.Channel, delayedOrderQueue *consumer) *servicer {
+func NewServicer(pool *pgxpool.Pool, latencyQuerier Storage.Querier,
+	amqpChannel *amqp091.Channel, delayedOrderQueue *consumer) *servicer {
 	return &servicer{
 		pool:              pool,
 		latencyQuerier:    latencyQuerier,
