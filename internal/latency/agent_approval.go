@@ -3,8 +3,9 @@ package latency
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 
@@ -15,6 +16,7 @@ func (s *servicer) AgentApproval(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		log.WithContext(ctx).Errorf("could not create a pgx pool %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -22,20 +24,39 @@ func (s *servicer) AgentApproval(w http.ResponseWriter, r *http.Request) {
 	agentIDAsString := r.URL.Query().Get("agent_id")
 	agentID, err := strconv.Atoi(agentIDAsString)
 	if err != nil {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Agent ID": agentIDAsString,
+		}).Errorf("could not convert agent id %s", err)
 		w.WriteHeader(500)
-		fmt.Println("Error:", err)
 		return
 	}
 
-	fmt.Println("Reading message queue")
-	msg := s.delayedOrderQueue.ReadMessage()
-	var delayReportID int
-	err = json.Unmarshal(msg.Body, &delayReportID)
-	fmt.Println("New report received", delayReportID)
+	err = s.assignOrderToAgentFromQueue(ctx, tx, agentID)
 	if err != nil {
 		w.WriteHeader(500)
-		fmt.Println("Error:", err)
 		return
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Agent ID": agentID,
+		}).Errorf("failed to commit transaction %s", err)
+		w.WriteHeader(500)
+		return
+	}
+}
+
+func (s *servicer) assignOrderToAgentFromQueue(ctx context.Context, tx pgx.Tx, agentID int) error {
+	var delayReportID int
+	msg := s.delayedOrderQueue.ReadMessage()
+	err := json.Unmarshal(msg.Body, &delayReportID)
+	if err != nil {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Queue message body": msg.Body,
+			"Delay report ID":    delayReportID,
+		}).Errorf("could not convert message body %s", err)
+		return err
 	}
 
 	agentIDToPgtypeInt := pgtype.Int4{
@@ -47,10 +68,5 @@ func (s *servicer) AgentApproval(w http.ResponseWriter, r *http.Request) {
 		ID:      int32(delayReportID),
 	})
 
-	err = tx.Commit(ctx)
-	if err != nil {
-		w.WriteHeader(500)
-		fmt.Println("Error:", err)
-		return
-	}
+	return nil
 }

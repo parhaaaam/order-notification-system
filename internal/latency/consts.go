@@ -3,6 +3,6 @@ package latency
 const (
 	ASSIGNED  = "ASSIGNED"
 	PICKED    = "PICKED"
-	VENDOR_AT = "VENDOR_AT"
+	AT_VENDOR = "AT_VENDOR"
 	DELIVERED = "DELIVERED"
 )

@@ -3,13 +3,13 @@ package latency
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
+	"order_notification_system/cmd/config"
 	"strconv"
 	"time"
 
@@ -27,6 +27,7 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	ctx := context.Background()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		log.WithContext(ctx).Errorf("could not create a pgx pool %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -34,37 +35,48 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	var shouldAddToQueue bool
 	var delayReportID int32
 
-	logrus.Print("this is method", r.Method)
-	idAsString := r.FormValue("id")
+	orderIDAsString := r.FormValue("id")
 	userDescription := r.FormValue("description")
 
-	id, err := strconv.Atoi(idAsString)
+	orderID, err := strconv.Atoi(orderIDAsString)
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Order ID": orderIDAsString,
+		}).Errorf("could not convert order id %s", err)
 		w.WriteHeader(500)
 		return
 	}
-	res, err := s.latencyQuerier.GetTripStatusAndOrderTimeDeliveryByOrderId(ctx, tx, int32(id))
+
+	res, err := s.latencyQuerier.GetTripStatusAndOrderTimeDeliveryByOrderId(ctx, tx, int32(orderID))
 	if err != nil {
 		shouldAddToQueue = true
 	}
+
 	if res.TimeDelivery.Time.After(time.Now()) {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Order ID":      orderID,
+			"Delivery time": res.TimeDelivery,
+		}).Errorf("time delivery from order is has not arriven %s", err)
 		w.WriteHeader(400)
 		return
 	}
 
 	switch res.Status {
-	case VENDOR_AT, PICKED, ASSIGNED:
+	case AT_VENDOR, PICKED, ASSIGNED:
 		remainingTime, err := calculateRemainingTime()
 		if err != nil {
-			logrus.Errorf("could not get remaining time from api")
+			log.WithContext(ctx).WithFields(log.Fields{
+				"Status": res.Status,
+			}).Errorf("could not get remaining time from remaining time calculator api %s", err)
 			w.WriteHeader(500)
 			return
 		}
 
 		resp, err := json.Marshal(remainingTime)
 		if err != nil {
-			logrus.Errorf("could not marshal json")
+			log.WithContext(ctx).WithFields(log.Fields{
+				"Remaining time": remainingTime,
+			}).Errorf("could not convert remaining time %s", err)
 			w.WriteHeader(500)
 			return
 		}
@@ -73,27 +85,37 @@ func (s *servicer) GetOrderDelayNotification(w http.ResponseWriter, r *http.Requ
 	case DELIVERED:
 		shouldAddToQueue = true
 	}
-	isReportValid, err := s.latencyQuerier.CheckDelayReportOrderIDIsClosed(ctx, tx, pgtype.Int4{Int32: int32(id)})
 
+	isReportValid, err := s.latencyQuerier.CheckDelayReportOrderIDIsClosed(ctx, tx, pgtype.Int4{Int32: int32(orderID)})
 	if isReportValid {
-		delayReportID, err = s.addDelayReports(ctx, tx, id, userDescription)
+		delayReportID, err = s.addDelayReports(ctx, tx, orderID, userDescription)
 		if err != nil {
+			log.WithContext(ctx).WithFields(log.Fields{
+				"Order ID":         orderID,
+				"User description": userDescription,
+			}).Errorf("could not add delay report in db %s", err)
 			w.WriteHeader(500)
-			return
-		}
-		err = tx.Commit(ctx)
-		if err != nil {
-			w.WriteHeader(500)
-			fmt.Println("Error:", err)
 			return
 		}
 
 		if shouldAddToQueue {
 			err = s.addToDelayQueue(ctx, delayReportID)
 			if err != nil {
+				log.WithContext(ctx).WithFields(log.Fields{
+					"Delay report ID": delayReportID,
+				}).Errorf("could not add delay report in queue %s", err)
 				w.WriteHeader(500)
 				return
 			}
+		}
+
+		err = tx.Commit(ctx)
+		if err != nil {
+			log.WithContext(ctx).WithFields(log.Fields{
+				"Order ID": orderID,
+			}).Errorf("failed to commit transaction %s", err)
+			w.WriteHeader(500)
+			return
 		}
 	}
 }
@@ -113,7 +135,6 @@ func (s *servicer) addDelayReports(ctx context.Context, tx pgx.Tx, id int,
 		Description: description,
 		OrderID:     orderID,
 	})
-	fmt.Println("Report data", description, orderID, delayReportID)
 	if err != nil {
 		return 0, err
 	}
@@ -143,23 +164,25 @@ func (s *servicer) addToDelayQueue(ctx context.Context, delayReportID int32) err
 }
 
 func calculateRemainingTime() (int, error) {
-	resp, err := http.Get("https://run.mocky.io/v3/122c2796-5df4-461c-ab75-87c1192b17f7")
+	conf := config.Load()
+	resp, err := http.Get(conf.CalculatorAPI.Domain + conf.CalculatorAPI.Address)
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Errorf("could not get remaining time from calculator api %s", err)
 		return 0, err
 	}
+
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Errorf("could not read response body from calculator api %s", err)
 		return 0, err
 	}
 
 	var response Response
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Errorf("could not convert response body to string %s", err)
 		return 0, err
 	}
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 
 	"order_notification_system/cmd/config"
 )
@@ -27,7 +27,7 @@ func NewConnectionPool(ctx context.Context, conf *config.Config) (*pgxpool.Pool,
 		return nil, err
 	}
 
-	logrus.WithField("max connections", conf.Pool.MaxConn).Info("started connection pool")
+	log.WithField("max connections", conf.Pool.MaxConn).Info("started connection pool")
 
 	return pool, pool.Ping(ctx)
 }

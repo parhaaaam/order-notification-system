@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"github.com/pkg/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"order_notification_system/cmd/config"
+	"order_notification_system/internal/clients/rabbitmq"
 	"order_notification_system/internal/storage"
 	"os"
 
@@ -26,15 +27,25 @@ func ServeRest() error {
 
 	conn, err := amqp.Dial(conf.RabbitMQClient.ConnectionURL)
 	if err != nil {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Connection URL": conf.RabbitMQClient.ConnectionURL,
+		}).Errorf("could not connect to rabbitmq%s", err)
 		return err
 	}
+
 	amqpChannel, err := conn.Channel()
 	if err != nil {
 		return err
 	}
 	defer amqpChannel.Close()
 
-	delayReportConsumer, err := latency.NewConsumer(amqpChannel, "delayed_orders")
+	delayReportConsumer, err := rabbitmq.NewConsumer(amqpChannel, "delayed_orders")
+	if err != nil {
+		log.WithContext(ctx).WithFields(log.Fields{
+			"Amqp Channel": amqpChannel,
+		}).Errorf("could not create consumer%s", err)
+		return err
+	}
 
 	latencyQuerier := entities.New()
 	servicer := latency.NewServicer(pool, latencyQuerier, amqpChannel, delayReportConsumer)

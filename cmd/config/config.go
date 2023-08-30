@@ -17,10 +17,16 @@ type RabbitMQConfig struct {
 	ConnectionURL string `mapstructure:"connectionurl"`
 }
 
+type CalculatorAPI struct {
+	Domain  string `mapstructure:"domain"`
+	Address string `mapstructure:"address"`
+}
+
 type Config struct {
 	Databases      config.DatabaseList `mapstructure:"databases,omitempty"`
 	Pool           PoolConfig          `mapstructure:"pool"`
 	RabbitMQClient RabbitMQConfig      `mapstructure:"rabbitmqclient"`
+	CalculatorAPI  CalculatorAPI       `mapstructure:"calculatorapi"`
 }
 
 func Load() *Config {
@@ -33,19 +39,26 @@ func Load() *Config {
 	viper.SetDefault("pool.max-cons", 3)
 	viper.SetDefault("pool.min-cons", 1)
 	viper.SetDefault("rabbitmqclient.connectionurl", "amqp://guest:guest@localhost:5672")
+	viper.SetDefault("calculatorapi.domain", "https://run.mocky.io/v3/")
+	viper.SetDefault("calculatorapi.uuid", "122c2796-5df4-461c-ab75-87c1192b17f7")
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	for _, key := range viper.AllKeys() {
-		_ = viper.BindEnv(key, strings.ToUpper(strings.ReplaceAll(key, ".", "_")))
-		//cobra.CheckErr(err)
+		err := viper.BindEnv(key, strings.ToUpper(strings.ReplaceAll(key, ".", "_")))
+		checkError(err)
 	}
 
 	conf := Config{}
-	if err := viper.Unmarshal(&conf); err != nil {
+	err := viper.Unmarshal(&conf)
+	checkError(err)
+
+	return &conf
+}
+
+func checkError(err error) {
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
-
-	return &conf
 }
